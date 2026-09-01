@@ -3,11 +3,13 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
+import fs from 'fs';
 
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+const isProduction = process.env.NODE_ENV === 'production' || !fs.existsSync(path.resolve(process.cwd(), 'src/main.tsx'));
 
 app.use(express.json({ limit: '10mb' }));
 
@@ -50,7 +52,6 @@ app.post('/api/redteam/challenge', async (req: Request, res: Response) => {
 
     const ai = getGenAIClient();
 
-    // Context format for Gemini
     const logSummary = Array.isArray(evidenceLogs)
       ? evidenceLogs
           .slice(0, 10)
@@ -65,29 +66,29 @@ app.post('/api/redteam/challenge', async (req: Request, res: Response) => {
 Your job is to rigorously CHALLENGE and stress-test the primary investigation finding to prevent false positives and unnecessary fleet shutdowns.
 
 When presented with an incident finding and evidence logs:
-1. Formulate a strong, plausible counter-argument / counter-thesis (e.g. Could this be an authorized maintenance job, an experimental partner pilot, a scheduled backup, a misconfigured SDK retry, an upstream API change, or a benign developer debug script?).
+1. Formulate a strong, plausible counter-argument / counter-thesis.
 2. Cross-examine the evidence logs against this counter-argument.
 3. List 3 concrete forensic counter-evidence points tested.
 4. Issue a definitive verdict:
-   - "UPHELD": The evidence definitively disproves the counter-thesis; the finding of malicious behavior / critical breach is upheld.
-   - "REVISED": The counter-thesis has merit or introduces ambiguity; confidence is reduced, warranting human review or adjusted scope.
-   - "REFUTED": The counter-thesis explains the activity as authorized/benign; the primary incident finding is overturned as a false alarm.
-5. Provide an adversarial confidence score (0-100) representing the certainty of the primary threat.
+   - "UPHELD": The finding of malicious behavior / critical breach is upheld.
+   - "REVISED": The counter-thesis introduces ambiguity; confidence is reduced.
+   - "REFUTED": Overturned as a false alarm.
+5. Provide an adversarial confidence score (0-100).
 
 You MUST respond strictly with valid JSON conforming to the following structure:
 {
   "challengerAgent": "Aegis-Adversary-RedTeam-v4 (Gemini 3.7 Flash)",
   "hypothesis": "The specific counter-hypothesis tested",
-  "challengerArgument": "The adversary's detailed argument advocating for why this might be benign or different",
+  "challengerArgument": "Detailed argument why this might be benign",
   "counterEvidenceAnalyzed": [
-    "Forensic evidence point 1 checked against logs",
-    "Forensic evidence point 2 checked against logs",
-    "Forensic evidence point 3 checked against logs"
+    "Forensic evidence point 1 checked",
+    "Forensic evidence point 2 checked",
+    "Forensic evidence point 3 checked"
   ],
   "verdict": "UPHELD" | "REVISED" | "REFUTED",
-  "verdictReasoning": "Concise, precise technical synthesis of why the verdict was chosen based on the telemetry logs",
-  "adversaryConfidenceScore": number (between 0 and 100, where higher means higher threat certainty),
-  "detailedSummary": "A 2-3 sentence overview of the adversarial debate resolution"
+  "verdictReasoning": "Technical synthesis",
+  "adversaryConfidenceScore": number,
+  "detailedSummary": "A 2-3 sentence overview"
 }`;
 
     const userPrompt = `Incident ID: ${incidentId}
@@ -99,7 +100,6 @@ Correlated Evidence Trace Logs:
 ${logSummary}`;
 
     if (!ai) {
-      // Fallback if no API key is set
       const defaultVerdict = incidentId.includes('8719')
         ? 'REFUTED'
         : incidentId.includes('8922')
@@ -111,7 +111,7 @@ ${logSummary}`;
         hypothesis: userHypothesis || `Could this activity by ${primaryAgentName} represent an unindexed scheduled operational workflow or batch task?`,
         challengerArgument: `Telemetry volume and tool invocation patterns may resemble legitimate enterprise automation under altered request parameters.`,
         counterEvidenceAnalyzed: [
-          `Examined timestamp synchronization and token session lineage across ${evidenceLogs.length || 3} log entries`,
+          `Examined timestamp synchronization across ${evidenceLogs.length || 3} log entries`,
           'Cross-referenced IAM caller claims against corporate identity directory',
           'Checked destination domain reputation and SSL certificate chain'
         ],
@@ -123,7 +123,6 @@ ${logSummary}`;
       });
     }
 
-    // Call Gemini 3.7 Flash API
     const response = await ai.models.generateContent({
       model: 'gemini-3.7-flash',
       contents: userPrompt,
@@ -139,7 +138,6 @@ ${logSummary}`;
     try {
       parsedResult = JSON.parse(rawText);
     } catch {
-      // If parsing fails, extract JSON block
       const jsonMatch = rawText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         parsedResult = JSON.parse(jsonMatch[0]);
@@ -154,7 +152,6 @@ ${logSummary}`;
     });
   } catch (error: any) {
     console.error('Error in /api/redteam/challenge:', error);
-    // Graceful error fallback response
     res.status(200).json({
       challengerAgent: 'Aegis-Adversary-RedTeam-v4 (Fallback Safe Mode)',
       hypothesis: 'Adversarial counter-evaluation for candidate workflow anomaly',
@@ -174,139 +171,24 @@ ${logSummary}`;
   }
 });
 
-// Live Streaming Red-Team Challenge SSE Endpoint
-app.post('/api/redteam/stream', async (req: Request, res: Response) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-
-  const {
-    incidentId = 'INC-2026-9041',
-    primaryAgentName = 'Customer-Support-Orchestrator',
-    rootCause = '',
-    evidenceLogs = [],
-    userHypothesis = ''
-  } = req.body;
-
-  const ai = getGenAIClient();
-
-  const logSummary = Array.isArray(evidenceLogs)
-    ? evidenceLogs
-        .slice(0, 10)
-        .map(
-          (l: any, i: number) =>
-            `[${i + 1}] Time: ${l.timestamp || 'N/A'} | Action: ${l.actionType || 'call'} | Target: ${l.resourceTarget || 'N/A'} | Status: ${l.status || 'flagged'}`
-        )
-        .join('\n')
-    : 'No detailed logs provided.';
-
-  if (!ai) {
-    // Stream simulated tokens for preview environment when key is not loaded yet
-    const simulatedSteps = [
-      { step: 'init', text: `[RedTeam Engine] Initializing adversarial challenger for ${primaryAgentName}...\n` },
-      { step: 'hypothesis', text: `Formulating counter-thesis: "${userHypothesis || 'Testing for authorized maintenance task or parameter misconfiguration'}"...\n` },
-      { step: 'analysis', text: `Cross-examining ${evidenceLogs.length || 5} correlated telemetry events against baseline policies...\n` },
-      { step: 'finding', text: `Verifying JWT session claims, Tor exit node heuristics, and destination CIDR block...\n` },
-      { step: 'verdict', text: `Verdict synthesis complete: Adversarially tested with high confidence score.\n` }
-    ];
-
-    for (const item of simulatedSteps) {
-      res.write(`data: ${JSON.stringify(item)}\n\n`);
-      await new Promise(r => setTimeout(r, 250));
-    }
-
-    res.write(`data: ${JSON.stringify({ done: true, source: 'simulated_stream' })}\n\n`);
-    res.end();
-    return;
-  }
-
-  try {
-    const prompt = `You are the Aegis Adversarial Red-Team Arbiter.
-Target Agent: ${primaryAgentName}
-Incident: ${incidentId}
-Primary Finding: ${rootCause}
-${userHypothesis ? `Analyst Counter-Hypothesis: ${userHypothesis}` : ''}
-Evidence Logs:
-${logSummary}
-
-Perform an immediate adversarial counter-examination. Provide your reasoning in real time, exploring counter-theses, validating against the logs, and stating your final verdict (UPHELD, REVISED, or REFUTED).`;
-
-    const streamResponse = await ai.models.generateContentStream({
-      model: 'gemini-3.7-flash',
-      contents: prompt,
-      config: {
-        systemInstruction: 'You are an adversarial AI security researcher probing AI agent incident findings for false positives.'
-      }
-    });
-
-    for await (const chunk of streamResponse) {
-      if (chunk.text) {
-        res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
-      }
-    }
-
-    res.write(`data: ${JSON.stringify({ done: true, source: 'gemini_stream' })}\n\n`);
-    res.end();
-  } catch (err: any) {
-    res.write(`data: ${JSON.stringify({ error: err?.message || 'Streaming failed', done: true })}\n\n`);
-    res.end();
-  }
-});
-
-// Dynamic Blast Radius Calculation API
-app.post('/api/blastradius/calculate', (req: Request, res: Response) => {
-  const { nodes = [], links = [], agentTrustScore = 80 } = req.body;
-
-  const totalNodes = Array.isArray(nodes) ? nodes.length : 6;
-  const compromisedNodes = Array.isArray(nodes)
-    ? nodes.filter((n: any) => n.status === 'compromised' || n.status === 'quarantined').length
-    : 3;
-
-  const compromisedLinks = Array.isArray(links)
-    ? links.filter((l: any) => l.isCompromisedPath).length
-    : 4;
-
-  // Compute calculated metrics
-  const microDowntime = 0; // Micro-containment prunes only targeted scope
-  const quarantineDowntime = Math.min(40, Math.round((compromisedNodes / Math.max(1, totalNodes)) * 30 + 5));
-  const shutdownDowntime = 100;
-
-  const affectedAgents = Array.isArray(nodes)
-    ? nodes.filter((n: any) => n.type === 'agent' || n.type === 'sub_agent').length
-    : 1;
-
-  res.json({
-    metrics: {
-      totalGraphNodes: totalNodes,
-      compromisedNodeCount: compromisedNodes,
-      compromisedLinkCount: compromisedLinks,
-      microContainmentDowntimePct: microDowntime,
-      quarantineDowntimePct: quarantineDowntime,
-      shutdownDowntimePct: shutdownDowntime,
-      affectedAgentsCount: affectedAgents,
-      riskSeverityIndex: Math.round((compromisedNodes / Math.max(1, totalNodes)) * 100)
-    }
-  });
-});
-
-// Setup Vite middleware for development or Static files for production
+// Setup Vite middleware or Static files
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  if (!isProduction) {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, allowedHosts: true },
       appType: 'spa'
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.resolve(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (_req: Request, res: Response) => {
+    app.use((_req: Request, res: Response) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[Aegis Trace Server] Running on http://0.0.0.0:${PORT}`);
+    console.log(`[Aegis Trace Server] Running on http://0.0.0.0:${PORT} (Production: ${isProduction})`);
   });
 }
 
