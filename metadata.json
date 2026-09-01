@@ -1,0 +1,7 @@
+{
+  "name": "Aegis Trace",
+  "description": "Autonomous incident investigation and containment platform for AI agent ecosystems.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
